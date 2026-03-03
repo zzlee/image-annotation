@@ -825,9 +825,14 @@ function saveAnnotations() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).then(() => {
+    }).then((res) => {
+        if (!res.ok) {
+            throw new Error('Failed to save annotations.');
+        }
         closeEditor();
-        loadHistory();
+        return loadHistory();
+    }).catch(() => {
+        alert('Failed to save annotations. Please try again.');
     });
 }
 
@@ -975,8 +980,13 @@ function exportYoloDataset() {
 }
 
 function loadHistory() {
-    fetch('/images')
-        .then((res) => res.json())
+    return fetch('/images')
+        .then((res) => {
+            if (!res.ok) {
+                throw new Error('Failed to load images.');
+            }
+            return res.json();
+        })
         .then((images) => {
             historyCount.textContent = `${images.length} image${images.length === 1 ? '' : 's'}`;
             historyImages = images;
@@ -987,6 +997,12 @@ function loadHistory() {
             );
             updateHistorySelectionUI();
             renderHistoryGrid();
+        })
+        .catch(() => {
+            imageList.innerHTML = '<div class="empty-state">Failed to load images. Refresh to try again.</div>';
+            historyCount.textContent = '0 images';
+            selectedImageUuids.clear();
+            updateHistorySelectionUI();
         });
 }
 
@@ -997,6 +1013,6 @@ window.editImage = editImage;
 setMode('draw');
 refreshEditorState();
 updateHistorySelectionUI();
-Promise.all([loadTags(), Promise.resolve(loadHistory())]).catch(() => {
+Promise.all([loadTags(), loadHistory()]).catch(() => {
     alert('Failed to initialize tags or images.');
 });
