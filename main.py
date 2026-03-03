@@ -16,6 +16,8 @@ app = FastAPI()
 # Configuration
 UPLOAD_DIR = "uploads"
 DB_PATH = "annotations.db"
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+ALLOWED_IMAGE_MIME_PREFIX = "image/"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Database Setup
@@ -157,14 +159,31 @@ class TagUpdateRequest(BaseModel):
 
 # API Endpoints
 def persist_upload_file(file: UploadFile):
-    ext = os.path.splitext(file.filename)[1]
+    ext = os.path.splitext(file.filename or "")[1].lower()
     image_uuid = str(uuid.uuid4())
     filename = f"{image_uuid}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
     return image_uuid, filename, file_path
 
+
+def validate_upload_file(file: UploadFile):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Uploaded file must have a name")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension: {ext or '[none]'}",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith(ALLOWED_IMAGE_MIME_PREFIX):
+        raise HTTPException(status_code=400, detail="Only image uploads are supported")
+
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
+    validate_upload_file(file)
     image_uuid, filename, file_path = persist_upload_file(file)
 
     with open(file_path, "wb") as f:
@@ -190,6 +209,7 @@ async def upload_images(files: List[UploadFile] = File(...)):
     with get_db() as conn:
         cursor = conn.cursor()
         for file in files:
+            validate_upload_file(file)
             image_uuid, filename, file_path = persist_upload_file(file)
             with open(file_path, "wb") as f:
                 f.write(await file.read())
