@@ -21,7 +21,9 @@
             </div>
             <div class="controls">
                 <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
-                <button id="captureBtn" class="primary-action">Capture / Upload</button>
+                <input type="file" id="batchUploadInput" accept="image/*" multiple hidden>
+                <button id="captureBtn" class="primary-action">Capture</button>
+                <button id="batchUploadBtn" class="secondary-action">Upload Multiple</button>
             </div>
         </header>
 
@@ -47,14 +49,13 @@
                         </div>
 
                         <div class="annotation-controls">
-                            <div class="input-group">
+                            <div class="input-group single-col">
                                 <label>
-                                    <span>New Object Class</span>
-                                    <input type="text" id="defaultClassName" placeholder="e.g. Tree" value="Unknown">
-                                </label>
-                                <label>
-                                    <span>New Object ID</span>
-                                    <input type="number" id="defaultClassId" placeholder="e.g. 1" value="0">
+                                    <span>Active Tag</span>
+                                    <div class="active-tag-row">
+                                        <select id="activeTagSelect"></select>
+                                        <button id="openTagModalBtn" class="tag-action-btn" type="button">Manage Tags</button>
+                                    </div>
                                 </label>
                             </div>
 
@@ -101,6 +102,28 @@
                 <div id="imageList" class="image-grid"></div>
             </section>
         </main>
+    </div>
+
+    <div id="tagModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tagModalTitle">
+        <div class="modal-backdrop" data-close-tag-modal="true"></div>
+        <div class="modal-card">
+            <div class="modal-head">
+                <h3 id="tagModalTitle">Tag Management</h3>
+                <button id="closeTagModalBtn" class="modal-close-btn" type="button">Close</button>
+            </div>
+            <div class="tag-manage-wrap">
+                <div class="tag-manage-row">
+                    <input id="newTagInput" type="text" placeholder="New tag name (e.g. Car)">
+                    <button id="addTagBtn" class="tag-action-btn" type="button">Add Tag</button>
+                </div>
+                <div class="tag-manage-row">
+                    <input id="renameTagInput" type="text" placeholder="Rename selected tag">
+                    <button id="renameTagBtn" class="tag-action-btn" type="button">Rename</button>
+                    <button id="deleteTagBtn" class="tag-action-btn danger" type="button">Delete Tag</button>
+                </div>
+                <p class="modal-help">Tip: choose the active tag in editor, then manage it here.</p>
+            </div>
+        </div>
     </div>
 
     <script src="/static/script.js"></script>

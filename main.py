@@ -27,6 +27,13 @@ def get_db():
 def init_db():
     with get_db() as conn:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 uuid TEXT UNIQUE,
@@ -95,6 +102,32 @@ def init_db():
                 created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
             """
         )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (name) VALUES ('Unknown')"
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO tags (name)
+            SELECT DISTINCT class_name
+            FROM annotations
+            WHERE class_name IS NOT NULL AND TRIM(class_name) != ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE annotations
+            SET class_id = COALESCE(
+                (
+                    SELECT t.id
+                    FROM tags t
+                    WHERE t.name = annotations.class_name
+                ),
+                class_id,
+                0
+            )
+            """
+        )
     print("Database initialized.")
 
 init_db()
@@ -103,7 +136,7 @@ init_db()
 class BoundingBox(BaseModel):
     annotation_uuid: Optional[str] = None
     class_name: str = "Unknown"
-    class_id: int = 0
+    class_id: Optional[int] = None
     bbox_x: float
     bbox_y: float
     bbox_w: float
@@ -116,17 +149,27 @@ class AnnotationUpdate(BaseModel):
 class ImageDeleteRequest(BaseModel):
     image_uuids: List[str]
 
+class TagCreateRequest(BaseModel):
+    name: str
+
+class TagUpdateRequest(BaseModel):
+    name: str
+
 # API Endpoints
-@app.post("/upload")
-async def upload_image(file: UploadFile = File(...)):
+def persist_upload_file(file: UploadFile):
     ext = os.path.splitext(file.filename)[1]
     image_uuid = str(uuid.uuid4())
     filename = f"{image_uuid}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
-    
+    return image_uuid, filename, file_path
+
+@app.post("/upload")
+async def upload_image(file: UploadFile = File(...)):
+    image_uuid, filename, file_path = persist_upload_file(file)
+
     with open(file_path, "wb") as f:
         f.write(await file.read())
-    
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -137,6 +180,34 @@ async def upload_image(file: UploadFile = File(...)):
         conn.commit()
     
     return {"image_uuid": image_uuid, "id": image_id}
+
+@app.post("/upload/batch")
+async def upload_images(files: List[UploadFile] = File(...)):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    uploaded = []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for file in files:
+            image_uuid, filename, file_path = persist_upload_file(file)
+            with open(file_path, "wb") as f:
+                f.write(await file.read())
+
+            cursor.execute(
+                "INSERT INTO images (uuid, filename, path) VALUES (?, ?, ?)",
+                (image_uuid, filename, file_path)
+            )
+            uploaded.append(
+                {
+                    "image_uuid": image_uuid,
+                    "id": cursor.lastrowid,
+                    "filename": filename,
+                }
+            )
+        conn.commit()
+
+    return {"uploaded": uploaded, "count": len(uploaded)}
 
 @app.post("/annotate")
 async def save_annotations(data: AnnotationUpdate):
@@ -151,10 +222,30 @@ async def save_annotations(data: AnnotationUpdate):
         
         # Clear existing annotations for this image
         cursor.execute("DELETE FROM annotations WHERE image_id = ?", (image_id,))
+
+        def resolve_tag_id_and_name(class_id: Optional[int], class_name: str):
+            if class_id is not None:
+                cursor.execute("SELECT id, name FROM tags WHERE id = ?", (class_id,))
+                row = cursor.fetchone()
+                if row:
+                    return row["id"], row["name"]
+
+            normalized_name = (class_name or "Unknown").strip() or "Unknown"
+            cursor.execute("SELECT id, name FROM tags WHERE name = ?", (normalized_name,))
+            row = cursor.fetchone()
+            if row:
+                return row["id"], row["name"]
+
+            cursor.execute(
+                "INSERT INTO tags (name) VALUES (?)",
+                (normalized_name,),
+            )
+            return cursor.lastrowid, normalized_name
         
         # Insert new annotations
         for sort_order, bbox in enumerate(data.annotations):
             annotation_uuid = bbox.annotation_uuid or str(uuid.uuid4())
+            tag_id, tag_name = resolve_tag_id_and_name(bbox.class_id, bbox.class_name)
             cursor.execute("""
                 INSERT INTO annotations (
                     image_id, annotation_uuid, class_name, class_id,
@@ -164,8 +255,8 @@ async def save_annotations(data: AnnotationUpdate):
             """, (
                 image_id,
                 annotation_uuid,
-                bbox.class_name or "Unknown",
-                bbox.class_id,
+                tag_name,
+                tag_id,
                 bbox.bbox_x,
                 bbox.bbox_y,
                 bbox.bbox_w,
@@ -191,6 +282,75 @@ async def get_images():
             img['annotations'] = [dict(row) for row in cursor.fetchall()]
             
     return images
+
+@app.get("/tags")
+async def get_tags():
+    with get_db() as conn:
+        rows = conn.execute("SELECT id, name FROM tags ORDER BY id ASC").fetchall()
+    return [dict(row) for row in rows]
+
+@app.post("/tags")
+async def create_tag(data: TagCreateRequest):
+    tag_name = (data.name or "").strip()
+    if not tag_name:
+        raise HTTPException(status_code=400, detail="Tag name is required")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM tags WHERE name = ?", (tag_name,))
+        existing = cursor.fetchone()
+        if existing:
+            return {"id": existing["id"], "name": existing["name"], "created": False}
+
+        cursor.execute("INSERT INTO tags (name) VALUES (?)", (tag_name,))
+        conn.commit()
+        return {"id": cursor.lastrowid, "name": tag_name, "created": True}
+
+@app.patch("/tags/{tag_id}")
+async def update_tag(tag_id: int, data: TagUpdateRequest):
+    tag_name = (data.name or "").strip()
+    if not tag_name:
+        raise HTTPException(status_code=400, detail="Tag name is required")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM tags WHERE id = ?", (tag_id,))
+        current = cursor.fetchone()
+        if not current:
+            raise HTTPException(status_code=404, detail="Tag not found")
+
+        cursor.execute("SELECT id FROM tags WHERE name = ? AND id != ?", (tag_name, tag_id))
+        duplicate = cursor.fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Tag name already exists")
+
+        cursor.execute("UPDATE tags SET name = ? WHERE id = ?", (tag_name, tag_id))
+        cursor.execute("UPDATE annotations SET class_name = ? WHERE class_id = ?", (tag_name, tag_id))
+        conn.commit()
+
+    return {"id": tag_id, "name": tag_name}
+
+@app.delete("/tags/{tag_id}")
+async def delete_tag(tag_id: int):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM tags WHERE id = ?", (tag_id,))
+        tag = cursor.fetchone()
+        if not tag:
+            raise HTTPException(status_code=404, detail="Tag not found")
+
+        cursor.execute("SELECT COUNT(*) AS count FROM annotations WHERE class_id = ?", (tag_id,))
+        usage_count = cursor.fetchone()["count"]
+        if usage_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Tag '{tag['name']}' is used by {usage_count} annotation(s)",
+            )
+
+        cursor.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+        conn.commit()
+
+    return {"status": "success", "deleted": 1}
 
 @app.delete("/images/{image_uuid}")
 async def delete_image(image_uuid: str):

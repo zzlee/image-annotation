@@ -1,15 +1,24 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const cameraInput = document.getElementById('cameraInput');
+const batchUploadInput = document.getElementById('batchUploadInput');
 const captureBtn = document.getElementById('captureBtn');
+const batchUploadBtn = document.getElementById('batchUploadBtn');
 const saveBtn = document.getElementById('saveBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const clearAllBtn = document.getElementById('clearAllBtn');
 const drawModeBtn = document.getElementById('drawModeBtn');
 const selectModeBtn = document.getElementById('selectModeBtn');
 const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
-const defaultClassNameInput = document.getElementById('defaultClassName');
-const defaultClassIdInput = document.getElementById('defaultClassId');
+const activeTagSelect = document.getElementById('activeTagSelect');
+const tagModal = document.getElementById('tagModal');
+const openTagModalBtn = document.getElementById('openTagModalBtn');
+const closeTagModalBtn = document.getElementById('closeTagModalBtn');
+const newTagInput = document.getElementById('newTagInput');
+const renameTagInput = document.getElementById('renameTagInput');
+const addTagBtn = document.getElementById('addTagBtn');
+const renameTagBtn = document.getElementById('renameTagBtn');
+const deleteTagBtn = document.getElementById('deleteTagBtn');
 const boxList = document.getElementById('boxList');
 const boxCountBadge = document.getElementById('boxCountBadge');
 const selectedBadge = document.getElementById('selectedBadge');
@@ -28,6 +37,7 @@ const MIN_BOX_SIZE_PX = 8;
 let currentImage = null;
 let currentImageUuid = null;
 let annotations = [];
+let tags = [];
 let mode = 'draw';
 let selectedBoxIndex = -1;
 let interaction = null;
@@ -35,7 +45,9 @@ let historyImages = [];
 let selectedImageUuids = new Set();
 
 captureBtn.onclick = () => cameraInput.click();
-cameraInput.onchange = handleUpload;
+batchUploadBtn.onclick = () => batchUploadInput.click();
+cameraInput.onchange = handleCaptureUpload;
+batchUploadInput.onchange = handleBatchUpload;
 saveBtn.onclick = saveAnnotations;
 cancelBtn.onclick = closeEditor;
 clearAllBtn.onclick = clearAllBoxes;
@@ -44,6 +56,22 @@ selectModeBtn.onclick = () => setMode('select');
 deleteSelectedBtn.onclick = () => deleteBox(selectedBoxIndex);
 deleteSelectedImagesBtn.onclick = deleteSelectedImages;
 exportYoloBtn.onclick = exportYoloDataset;
+addTagBtn.onclick = addTag;
+renameTagBtn.onclick = renameActiveTag;
+deleteTagBtn.onclick = deleteActiveTag;
+openTagModalBtn.onclick = openTagModal;
+closeTagModalBtn.onclick = closeTagModal;
+
+tagModal.addEventListener('click', (e) => {
+    if (e.target.matches('[data-close-tag-modal=\"true\"]')) {
+        closeTagModal();
+    }
+});
+
+activeTagSelect.onchange = () => {
+    const tag = getActiveTag();
+    renameTagInput.value = tag ? tag.name : '';
+};
 
 selectAllImages.onchange = () => {
     if (selectAllImages.checked) {
@@ -59,7 +87,6 @@ canvas.addEventListener('mousedown', onPointerDown);
 canvas.addEventListener('mousemove', onPointerMove);
 canvas.addEventListener('mouseup', onPointerUp);
 canvas.addEventListener('mouseleave', onPointerUp);
-
 canvas.addEventListener('touchstart', onPointerDown, { passive: false });
 canvas.addEventListener('touchmove', onPointerMove, { passive: false });
 canvas.addEventListener('touchend', onPointerUp, { passive: false });
@@ -72,6 +99,10 @@ window.addEventListener('resize', () => {
 });
 
 document.addEventListener('keydown', (e) => {
+    if (!tagModal.classList.contains('hidden') && e.key === 'Escape') {
+        closeTagModal();
+        return;
+    }
     if (editor.classList.contains('hidden')) {
         return;
     }
@@ -95,47 +126,26 @@ boxList.addEventListener('click', (e) => {
     }
 });
 
-boxList.addEventListener('input', (e) => {
-    const classNameInput = e.target.closest('[data-class-name-index]');
-    if (classNameInput) {
-        const index = Number.parseInt(classNameInput.dataset.classNameIndex, 10);
-        if (!Number.isNaN(index) && annotations[index]) {
-            annotations[index].class_name = classNameInput.value;
-            redraw();
-        }
-        return;
-    }
-
-    const classIdInput = e.target.closest('[data-class-id-index]');
-    if (classIdInput) {
-        const index = Number.parseInt(classIdInput.dataset.classIdIndex, 10);
-        if (!Number.isNaN(index) && annotations[index]) {
-            annotations[index].class_id = Number.parseInt(classIdInput.value, 10) || 0;
-        }
-    }
-});
-
 boxList.addEventListener('change', (e) => {
-    const classNameInput = e.target.closest('[data-class-name-index]');
-    if (classNameInput) {
-        const index = Number.parseInt(classNameInput.dataset.classNameIndex, 10);
-        if (!Number.isNaN(index) && annotations[index]) {
-            const value = classNameInput.value.trim();
-            annotations[index].class_name = value || 'Unknown';
-            renderBoxList();
-            redraw();
-        }
+    const tagSelect = e.target.closest('[data-tag-index]');
+    if (!tagSelect) {
         return;
     }
 
-    const classIdInput = e.target.closest('[data-class-id-index]');
-    if (classIdInput) {
-        const index = Number.parseInt(classIdInput.dataset.classIdIndex, 10);
-        if (!Number.isNaN(index) && annotations[index]) {
-            annotations[index].class_id = Number.parseInt(classIdInput.value, 10) || 0;
-            renderBoxList();
-        }
+    const index = Number.parseInt(tagSelect.dataset.tagIndex, 10);
+    const tagId = Number.parseInt(tagSelect.value, 10);
+    if (Number.isNaN(index) || Number.isNaN(tagId) || !annotations[index]) {
+        return;
     }
+
+    const tag = getTagById(tagId);
+    if (!tag) {
+        return;
+    }
+
+    annotations[index].class_id = tag.id;
+    annotations[index].class_name = tag.name;
+    redraw();
 });
 
 function makeUuid() {
@@ -145,13 +155,161 @@ function makeUuid() {
     return `obj-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
-function getDefaultClassName() {
-    const value = defaultClassNameInput.value.trim();
-    return value || 'Unknown';
+function openTagModal() {
+    const tag = getActiveTag();
+    renameTagInput.value = tag ? tag.name : '';
+    tagModal.classList.remove('hidden');
 }
 
-function getDefaultClassId() {
-    return Number.parseInt(defaultClassIdInput.value, 10) || 0;
+function closeTagModal() {
+    tagModal.classList.add('hidden');
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function getTagById(tagId) {
+    return tags.find((t) => t.id === tagId) || null;
+}
+
+function getActiveTag() {
+    const id = Number.parseInt(activeTagSelect.value, 10);
+    if (Number.isNaN(id)) {
+        return null;
+    }
+    return getTagById(id);
+}
+
+function ensureTagLocally(tagId, tagName) {
+    if (tagId == null) {
+        return;
+    }
+    if (getTagById(tagId)) {
+        return;
+    }
+    tags.push({ id: tagId, name: tagName || `Tag ${tagId}` });
+    tags.sort((a, b) => a.id - b.id);
+}
+
+function renderActiveTagSelect(preferredTagId = null) {
+    const currentValueId = Number.parseInt(activeTagSelect.value, 10);
+    const selectedId = preferredTagId ?? (Number.isNaN(currentValueId) ? (tags[0] ? tags[0].id : null) : currentValueId);
+    activeTagSelect.innerHTML = tags
+        .map((tag) => `<option value="${tag.id}" ${tag.id === selectedId ? 'selected' : ''}>${escapeHtml(tag.name)} (#${tag.id})</option>`)
+        .join('');
+    activeTagSelect.disabled = tags.length === 0;
+    addTagBtn.disabled = false;
+    renameTagBtn.disabled = tags.length === 0;
+    deleteTagBtn.disabled = tags.length === 0;
+
+    const currentTag = getActiveTag();
+    renameTagInput.value = currentTag ? currentTag.name : '';
+}
+
+function getTagOptionsHtml(selectedTagId) {
+    if (tags.length === 0) {
+        return '<option value="">No tags</option>';
+    }
+
+    return tags
+        .map((tag) => `<option value="${tag.id}" ${tag.id === selectedTagId ? 'selected' : ''}>${escapeHtml(tag.name)} (#${tag.id})</option>`)
+        .join('');
+}
+
+async function loadTags(preferredTagId = null) {
+    const res = await fetch('/tags');
+    if (!res.ok) {
+        throw new Error('Failed to load tags');
+    }
+    tags = await res.json();
+    renderActiveTagSelect(preferredTagId);
+}
+
+async function addTag() {
+    const name = newTagInput.value.trim();
+    if (!name) {
+        alert('Tag name is required.');
+        return;
+    }
+
+    const res = await fetch('/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+    });
+
+    if (!res.ok) {
+        alert('Failed to create tag.');
+        return;
+    }
+
+    const result = await res.json();
+    await loadTags(result.id);
+    newTagInput.value = '';
+    refreshEditorState();
+}
+
+async function renameActiveTag() {
+    const active = getActiveTag();
+    if (!active) {
+        alert('Select a tag first.');
+        return;
+    }
+
+    const nextName = renameTagInput.value.trim();
+    if (!nextName) {
+        alert('New tag name is required.');
+        return;
+    }
+
+    const res = await fetch(`/tags/${active.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName })
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to rename tag.' }));
+        alert(err.detail || 'Failed to rename tag.');
+        return;
+    }
+
+    annotations.forEach((ann) => {
+        if (ann.class_id === active.id) {
+            ann.class_name = nextName;
+        }
+    });
+
+    await loadTags(active.id);
+    refreshEditorState();
+    loadHistory();
+}
+
+async function deleteActiveTag() {
+    const active = getActiveTag();
+    if (!active) {
+        return;
+    }
+
+    if (!confirm(`Delete tag "${active.name}" (#${active.id})?`)) {
+        return;
+    }
+
+    const res = await fetch(`/tags/${active.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to delete tag.' }));
+        alert(err.detail || 'Failed to delete tag.');
+        return;
+    }
+
+    await loadTags();
+    refreshEditorState();
 }
 
 function setMode(nextMode) {
@@ -161,8 +319,8 @@ function setMode(nextMode) {
     canvas.style.cursor = mode === 'draw' ? 'crosshair' : selectedBoxIndex >= 0 ? 'move' : 'default';
     editorHint.textContent =
         mode === 'draw'
-            ? 'Draw mode: drag on image to add a new object using default class.'
-            : 'Select mode: click object, drag to move, drag corners to resize, edit class in list.';
+            ? 'Draw mode: drag on image to add object with active tag.'
+            : 'Select mode: click object, drag to move, drag corners to resize, change tag in list.';
 }
 
 function updateBadges() {
@@ -193,34 +351,14 @@ function renderBoxList() {
                         <button class="box-delete-btn" type="button" data-delete-index="${idx}">Delete</button>
                     </div>
                     <div class="box-class-row">
-                        <input
-                            class="box-class-input"
-                            data-class-name-index="${idx}"
-                            type="text"
-                            placeholder="Class name"
-                            value="${escapeHtml(box.class_name || 'Unknown')}"
-                        >
-                        <input
-                            class="box-class-input"
-                            data-class-id-index="${idx}"
-                            type="number"
-                            placeholder="ID"
-                            value="${Number.isInteger(box.class_id) ? box.class_id : 0}"
-                        >
+                        <select class="box-class-input" data-tag-index="${idx}">
+                            ${getTagOptionsHtml(box.class_id)}
+                        </select>
                     </div>
                 </div>
             `;
         })
         .join('');
-}
-
-function escapeHtml(value) {
-    return String(value)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
 }
 
 function renderThumbOverlay(annotationsForImage) {
@@ -292,9 +430,7 @@ function selectBox(index) {
     } else {
         selectedBoxIndex = index;
     }
-    updateBadges();
-    renderBoxList();
-    redraw();
+    refreshEditorState();
 }
 
 function getEventPoint(e) {
@@ -463,6 +599,14 @@ function onPointerUp(e) {
     }
 
     if (interaction.type === 'draw') {
+        const activeTag = getActiveTag();
+        if (!activeTag) {
+            alert('Create/select a tag before drawing annotations.');
+            interaction = null;
+            redraw();
+            return;
+        }
+
         const x1 = interaction.startX;
         const y1 = interaction.startY;
         const x2 = interaction.currentX;
@@ -473,8 +617,8 @@ function onPointerUp(e) {
         if (width >= MIN_BOX_SIZE_PX && height >= MIN_BOX_SIZE_PX) {
             annotations.push({
                 annotation_uuid: makeUuid(),
-                class_name: getDefaultClassName(),
-                class_id: getDefaultClassId(),
+                class_name: activeTag.name,
+                class_id: activeTag.id,
                 x: Math.min(x1, x2) / canvas.width,
                 y: Math.min(y1, y2) / canvas.height,
                 w: width / canvas.width,
@@ -537,7 +681,7 @@ function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 
-function handleUpload(e) {
+function handleCaptureUpload(e) {
     const file = e.target.files[0];
     if (!file) {
         return;
@@ -547,21 +691,43 @@ function handleUpload(e) {
     formData.append('file', file);
 
     fetch('/upload', { method: 'POST', body: formData })
-        .then((res) => res.json())
-        .then((data) => {
-            currentImageUuid = data.image_uuid;
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                currentImage = new Image();
-                currentImage.onload = () => {
-                    editor.classList.remove('hidden');
-                    resetEditorState();
-                    setupCanvas();
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                };
-                currentImage.src = event.target.result;
-            };
-            reader.readAsDataURL(file);
+        .then((res) => {
+            if (!res.ok) {
+                throw new Error('Capture upload failed');
+            }
+            return res.json();
+        })
+        .then(() => {
+            cameraInput.value = '';
+            loadHistory();
+        })
+        .catch(() => {
+            alert('Failed to upload captured image.');
+        });
+}
+
+function handleBatchUpload(e) {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) {
+        return;
+    }
+
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
+
+    fetch('/upload/batch', { method: 'POST', body: formData })
+        .then((res) => {
+            if (!res.ok) {
+                throw new Error('Batch upload failed');
+            }
+            return res.json();
+        })
+        .then(() => {
+            batchUploadInput.value = '';
+            loadHistory();
+        })
+        .catch(() => {
+            alert('Failed to upload images.');
         });
 }
 
@@ -641,15 +807,18 @@ function saveAnnotations() {
 
     const payload = {
         image_uuid: currentImageUuid,
-        annotations: annotations.map((box) => ({
-            annotation_uuid: box.annotation_uuid,
-            class_name: (box.class_name || 'Unknown').trim() || 'Unknown',
-            class_id: Number.parseInt(box.class_id, 10) || 0,
-            bbox_x: box.x,
-            bbox_y: box.y,
-            bbox_w: box.w,
-            bbox_h: box.h
-        }))
+        annotations: annotations.map((box) => {
+            const tag = getTagById(box.class_id);
+            return {
+                annotation_uuid: box.annotation_uuid,
+                class_name: tag ? tag.name : (box.class_name || 'Unknown').trim() || 'Unknown',
+                class_id: tag ? tag.id : (Number.parseInt(box.class_id, 10) || null),
+                bbox_x: box.x,
+                bbox_y: box.y,
+                bbox_w: box.w,
+                bbox_h: box.h
+            };
+        })
     };
 
     fetch('/annotate', {
@@ -670,20 +839,24 @@ function editImage(uuid, filename, encodedAnnotations) {
     currentImage.onload = () => {
         editor.classList.remove('hidden');
 
-        annotations = source.map((a) => ({
-            annotation_uuid: a.annotation_uuid || makeUuid(),
-            class_name: a.class_name || 'Unknown',
-            class_id: Number.parseInt(a.class_id, 10) || 0,
-            x: a.bbox_x,
-            y: a.bbox_y,
-            w: a.bbox_w,
-            h: a.bbox_h
-        }));
+        annotations = source.map((a) => {
+            const tagId = Number.parseInt(a.class_id, 10);
+            ensureTagLocally(Number.isNaN(tagId) ? null : tagId, a.class_name || 'Unknown');
+            return {
+                annotation_uuid: a.annotation_uuid || makeUuid(),
+                class_name: a.class_name || 'Unknown',
+                class_id: Number.isNaN(tagId) ? null : tagId,
+                x: a.bbox_x,
+                y: a.bbox_y,
+                w: a.bbox_w,
+                h: a.bbox_h
+            };
+        });
+
+        renderActiveTagSelect(annotations[0] ? annotations[0].class_id : null);
 
         if (annotations.length > 0) {
             selectedBoxIndex = 0;
-            defaultClassNameInput.value = annotations[0].class_name || 'Unknown';
-            defaultClassIdInput.value = annotations[0].class_id;
             setMode('select');
         } else {
             selectedBoxIndex = -1;
@@ -731,8 +904,8 @@ function renderHistoryGrid() {
     imageList.innerHTML = historyImages
         .map((img) => {
             const annJson = encodeURIComponent(JSON.stringify(img.annotations));
-            const checked = selectedImageUuids.has(img.uuid) ? "checked" : "";
-                    return `
+            const checked = selectedImageUuids.has(img.uuid) ? 'checked' : '';
+            return `
                 <div class="image-card">
                     <div class="image-thumb-wrap">
                         <img src="/uploads/${img.filename}" alt="Annotated upload">
@@ -824,4 +997,6 @@ window.editImage = editImage;
 setMode('draw');
 refreshEditorState();
 updateHistorySelectionUI();
-loadHistory();
+Promise.all([loadTags(), Promise.resolve(loadHistory())]).catch(() => {
+    alert('Failed to initialize tags or images.');
+});
