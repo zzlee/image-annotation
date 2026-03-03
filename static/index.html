@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Image Annotator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="bg-orb orb-a" aria-hidden="true"></div>
+    <div class="bg-orb orb-b" aria-hidden="true"></div>
+
+    <div id="app">
+        <header class="topbar">
+            <div class="title-wrap">
+                <p class="eyebrow">Vision Workflow</p>
+                <h1>Image Annotator</h1>
+            </div>
+            <div class="controls">
+                <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+                <button id="captureBtn" class="primary-action">Capture / Upload</button>
+            </div>
+        </header>
+
+        <main>
+            <section id="editor" class="panel hidden">
+                <div class="panel-head">
+                    <h2>Annotation Editor</h2>
+                    <p id="editorHint">Draw mode: drag on image to add a new box.</p>
+                </div>
+
+                <div class="editor-workspace">
+                    <div class="editor-canvas">
+                        <div class="canvas-container">
+                            <canvas id="canvas"></canvas>
+                        </div>
+                    </div>
+
+                    <aside class="editor-sidebar">
+                        <div class="tool-row">
+                            <button id="drawModeBtn" class="tool-btn active" type="button">Draw</button>
+                            <button id="selectModeBtn" class="tool-btn" type="button">Select</button>
+                            <button id="deleteSelectedBtn" class="tool-btn danger" type="button" disabled>Delete</button>
+                        </div>
+
+                        <div class="annotation-controls">
+                            <div class="input-group">
+                                <label>
+                                    <span>New Object Class</span>
+                                    <input type="text" id="defaultClassName" placeholder="e.g. Tree" value="Unknown">
+                                </label>
+                                <label>
+                                    <span>New Object ID</span>
+                                    <input type="number" id="defaultClassId" placeholder="e.g. 1" value="0">
+                                </label>
+                            </div>
+
+                            <div class="meta-row">
+                                <span id="boxCountBadge" class="badge-info">0 boxes</span>
+                                <span id="selectedBadge" class="badge-info muted">No selection</span>
+                            </div>
+
+                            <div class="box-list-wrap">
+                                <h3>Boxes</h3>
+                                <div id="boxList" class="box-list"></div>
+                            </div>
+
+                            <div class="button-group">
+                                <button id="saveBtn" class="btn-save">Save All</button>
+                                <button id="clearAllBtn" class="btn-clear">Clear All</button>
+                                <button id="cancelBtn" class="btn-close">Close</button>
+                            </div>
+                        </div>
+                    </aside>
+                </div>
+            </section>
+
+            <section id="history" class="panel history-panel">
+                <div class="panel-head">
+                    <h2>Annotated Images</h2>
+                    <div class="history-meta">
+                        <p id="historyCount">0 images</p>
+                        <span id="historySelected">0 selected</span>
+                    </div>
+                </div>
+                <div class="history-actions">
+                    <label class="select-all-label">
+                        <input id="selectAllImages" type="checkbox">
+                        <span>Select all</span>
+                    </label>
+                    <div class="history-action-buttons">
+                        <button id="exportYoloBtn" class="btn-export-yolo" type="button">Export YOLO</button>
+                        <button id="deleteSelectedImagesBtn" class="btn-delete-images" type="button" disabled>
+                            Delete Selected
+                        </button>
+                    </div>
+                </div>
+                <div id="imageList" class="image-grid"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
